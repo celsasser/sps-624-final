@@ -1,0 +1,119 @@
+---
+title: "Project_2_YR"
+output: html_document
+date: "2025-05-05"
+---
+
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(corrplot)
+library(GGally)
+library(caret)
+library(rpart)
+library(randomForest)
+library(Metrics)
+library(janitor)
+library(rpart.plot)
+```
+
+```{r}
+train_data <- read_excel("StudentData.xlsx") %>%
+  clean_names()
+
+test_data <- read_excel("StudentEvaluation.xlsx")
+
+glimpse(train_data)
+
+missing_summary <- colSums(is.na(train_data))
+print(missing_summary[missing_summary > 0])
+
+#Exploratory analysis
+ggplot(train_data, aes(x = ph)) +
+  geom_histogram(bins = 30) +
+  labs(title = "Distribution of pH", x = "pH", y = "Count")
+
+
+#overall looks like ph follows normal distribution
+numeric_data <- train_data %>%
+  select(where(is.numeric)) %>%
+  drop_na()
+
+cor_matrix <- cor(numeric_data, use = "pairwise.complete.obs")
+corrplot(cor_matrix, method = "color", type = "upper", tl.cex = 0.7, tl.col = "black")
+
+
+ggpairs(numeric_data, columns = c("ph", "carb_volume", "fill_ounces", "balling", "carb_flow"),
+        upper = list(continuous = wrap("cor", size = 3))) +
+  theme_bw()
+```
+```{r}
+# Load and clean data
+train_data <- read_excel("StudentData.xlsx") %>% 
+  clean_names()
+test_data  <- read_excel("StudentEvaluation.xlsx") %>% 
+  clean_names()
+
+# EDA: Correlation plots and scatterplots
+train_data_eda <- train_data %>% filter(!is.na(ph))
+
+ggpairs(train_data_eda, columns = c("ph", "carb_volume", "fill_ounces", "balling", "carb_flow"),
+        upper = list(continuous = wrap("cor", size = 3))) +
+  theme_bw()
+
+# Remove non-numeric or unnecessary columns
+train_data_clean <- train_data %>%
+  filter(!is.na(ph)) %>%
+  select(-brand_code)
+
+test_data_clean <- test_data %>%
+  select(-brand_code, -ph)
+
+# Impute missing values using median
+pre_proc <- preProcess(train_data_clean, method = "medianImpute")
+train_data_imputed <- predict(pre_proc, train_data_clean)
+test_data_imputed <- predict(pre_proc, test_data_clean)
+
+# Prepare predictors and outcome
+x <- train_data_imputed %>% select(-ph)
+y <- train_data_imputed$ph
+
+# Train/test split
+set.seed(505)
+train_index <- createDataPartition(y, p = 0.8, list = FALSE)
+x_train <- x[train_index, ]
+x_valid <- x[-train_index, ]
+y_train <- y[train_index]
+y_valid <- y[-train_index]
+
+# Train models
+dt_model <- rpart(y_train ~ ., data = data.frame(x_train, y_train))
+rf_model <- randomForest(x = x_train, y = y_train, ntree = 500,
+                         mtry = floor(sqrt(ncol(x_train))), importance = TRUE)
+
+rpart.plot(dt_model,
+           type = 2,           
+           extra = 101,        
+           fallen.leaves = TRUE,
+           main = "Decision Tree for pH Prediction")
+
+# Predict and evaluate
+dt_preds <- predict(dt_model, newdata = x_valid)
+rf_preds <- predict(rf_model, newdata = x_valid)
+
+dt_rmse <- rmse(y_valid, dt_preds)
+rf_rmse <- rmse(y_valid, rf_preds)
+
+print(paste("Decision Tree RMSE:", round(dt_rmse, 4)))
+print(paste("Random Forest RMSE:", round(rf_rmse, 4)))
+
+# Final prediction on test set
+rf_test_preds <- predict(rf_model, newdata = test_data_imputed)
+
+varImpPlot(rf_model,
+           type = 1,            
+           main = "Random Forest Variable Importance")
+```
+

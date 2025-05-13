@@ -1,0 +1,343 @@
+---
+title: "Project 2: Linear Regression and Its Cousins"
+author: "Amanda Rose Knudsen"
+date: "2025-05-04"
+# format:
+#  pdf:
+#    geometry: "left=0.5in, right=0.5in, top=0.5in, bottom=0.5in"
+#    fig-width: 7.5
+#    fig-height: 5.5
+format: html
+editor: source
+keep-lines-together: true
+---
+
+# Project 2 (Team) Assignment Prompt:
+
+This is role playing.  I am your new boss.  I am in charge of production at ABC Beverage and you are a team of data scientists reporting to me.  My leadership has told me that new regulations are requiring us to understand our manufacturing process, the predictive factors and be able to report to them our predictive model of PH.
+
+Please use the historical data set I am providing.  Build and report the factors in BOTH a technical and non-technical report.  I like to use Word and Excel.  Please provide your non-technical report in a  business friendly readable document and your predictions in an Excel readable format.   The technical report should show clearly the models you tested and how you selected your final approach.
+
+Please submit both Rpubs links and .rmd files or other readable formats for technical and non-technical reports.  Also submit the excel file showing the prediction of your models for pH.
+
+```{r setup, echo=TRUE, results='hide', warning=FALSE, message=FALSE}
+library(tidyverse)
+library(knitr)
+library(caret)
+library(pls)
+library(glmnet)
+library(readxl)
+library(corrplot)
+library(RANN)
+library(e1071)
+```
+
+# Linear Regression Model
+
+Our objective is to evaluate several linear modeling approaches to predict pH in a beverage production process, with a focus on accuracy, interpretability, and practical application for business stakeholders.
+
+## Explore and Preprocess
+
+We'll explore and then pre-process the data. First, we must load the data files.
+
+The "StudentData" file is our training data, and the "StudentEvaluation" file is our testing data.
+
+If our data had not been provided in separate training and test files, we would subsequently perform a split of the 'main' data file into a training and a test set. In this case, since it's already been provided, we do not need to segment. 
+
+```{r}
+train_data <- read_excel("StudentData.xlsx")
+test_data <- read_excel("StudentEvaluation.xlsx")
+```
+
+Since we'll be training our model on the training data, let's look at the first few rows of the data to see what we've got. 
+
+```{r}
+head(train_data)
+```
+
+```{r}
+str(train_data)
+```
+
+We can see there are 33 columns in total and 2,571 rows in total. The 33 columns includes  the "PH" column which is what we will be aiming to predict -- PH will be the response variable in our linear regression exploration.    
+
+We can see that we have mostly numeric values. The only character or categorical (non-numeric) is the `Brand Code`. Based on information in our team's preferred guidance on predictive modeling, to deal with non-numeric values (a.k.a. categorical values, which Brand Code is the only one) the recommendation is to either convert into dummy variables or remove if not informative or the value has too many categories. 
+
+Since "Brand Code" may be an important predictor, we will choose to convert to a dummy variable before training (since models such as Lasso requires input predictors to be numeric).
+
+We can also see there is an assortment of null values even just in the first few rows of data, across various columns. This gives us a sense that we will need to impute missing values. This is a preferable approach to our exploratory predictive work because it enables us to keep predictors. 
+
+We can also see that there are negative values which means we won't be able to apply the BoxCox method for processing our data. Our guidance and standards, from Applied Predictive Modeling, state that if the data includes negatives we should use the YeoJohnson method instead. 
+
+```{r}
+colSums(is.na(train_data))
+```
+Once we build our training and test sets, we will continue exploration and pre-processing, including by dealing with our null values and looking at the relationships among predictors, among other steps.
+
+We also notice there are 4 missing values for PH, which will be problematic. Guidance to handle this scenario is to remove the rows where the PH is null from the training and test sets so that would include removing the rows in the predictor and response sets. We will explain more on this when we get to that step prior to training our model. 
+
+### Prepare response and predictor sets
+
+We'll prepare response and predictor sets (separating out the predictors and response variable -- pH is our "response".) We'll also remove "Brand Code" from both the training and test sets.
+
+```{r}
+train_y <- train_data$PH
+train_x <- train_data |> select(-PH)
+test_y <- test_data$PH
+test_x <- test_data |> select(-PH)
+```
+
+Next we'll convert all to numeric (dummy encoding for non-numeric variable Brand Code)
+```{r}
+dummies <- dummyVars(~ ., data = train_x)
+train_x <- predict(dummies, newdata = train_x)
+test_x  <- predict(dummies, newdata = test_x)
+```
+
+### Correlation matrix
+
+A correlation matrix is used to understand the relationships among predictor variables. 
+```{r}
+cor_matrix <- cor(train_x, use = "pairwise.complete.obs")
+corrplot(cor_matrix, order = "hclust", tl.cex = 0.7)
+```
+
+We removed highly redundant predictors using a correlation threshold of 0.95. While 0.75 is a common starting point, retaining more features helps maintain signal for models like PLS, which can internally handle correlated predictors by extracting latent factors.
+
+```{r}
+high_corr <- findCorrelation(cor_matrix, cutoff = 0.95)
+train_x <- train_x[, -high_corr]
+test_x <- test_x[, -high_corr]  
+```
+
+
+We removed only near-duplicate predictors with a correlation threshold of 0.95 to preserve interpretability for linear models while retaining useful variance for PLS.
+
+### Impute, transform, center and scale
+
+To accommodate both traditional linear regression and PLS models, we will apply a preprocessing pipeline that includes transformations, centering, scaling, and imputation. Again based on our expert guidance from Applied Predictive Modeling, we will use the training set to fit preprocessing, and apply it to both training and test sets. We're setting the "seed" here to ensure reproducibility of results. 
+
+We will be imputing values using "knnImpute" to handle our NULL (missing) values; we will be using "YeoJohnson" for handling skewness and negative values (which we observed in our dataset -- hence BoxCox method would not be appropriate), and we will center and scale the values, which is important for applied predictive modeling.
+
+
+```{r}
+train_x <- as.data.frame(train_x)
+test_x <- as.data.frame(test_x)
+```
+
+We coerced the entire dataset to a dataframe to ensure that our preprocessing steps will work. 
+
+However, before we move on we remember there are missing values in our outcome variable. 
+```{r}
+sum(is.na(train_y))
+```
+
+```{r}
+sum(is.na(test_y))
+```
+All 267 rows of the test set are missing values for PH because that is what we are trying to predict. This means that we can't remove all the corresponding predictor variables in the test set because that would literally remove all the values in our test set. 
+
+
+We'll remove rows from the training set where the outcome is missing. Modeling cannot proceed with missing values in the outcome. 
+
+```{r}
+complete_rows <- complete.cases(train_y)
+train_y <- train_y[complete_rows]
+train_x <- train_x[complete_rows, ]
+```
+
+# To ensure that KNN imputation of missing values will work, we'll coerce the entire dataset to avoid hidden issues and then preprocess.
+
+```{r}
+set.seed(5889)
+preProc <- preProcess(train_x, method = c("knnImpute", "YeoJohnson", "center", "scale"))
+train_x_proc <- predict(preProc, train_x)
+test_x_proc <- predict(preProc, test_x)
+```
+
+These preprocessing steps are essential to ensure that both OLS and PLS models can operate effectively and fairly. Missing values were imputed using K-nearest neighbors (knnImpute), which leverages the similarity between observations to fill gaps in the data. Our dataset includes negative values and non-normal distributions, which makes BoxCox unsuitable. Instead, we used the YeoJohnson transformation, which can handle zero and negative values while stabilizing variance. Centering and scaling were included to ensure all predictors are on the same scale—important for methods like PLS and Lasso that are sensitive to feature magnitudes.
+
+Now we are ready to train with linear regression using the processed data. This ensures fair comparison of model performance across the different algorithms. 
+
+## Preprocessing continued
+
+
+We'll now set up trainControl setup for model training.
+
+```{r}
+ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
+```
+
+
+## Train Partial Least Squares (PLS) model
+
+```{r}
+set.seed(5889)
+pls_model <- train(
+  x = train_x_proc,
+  y = train_y,
+  method = "pls",
+  tuneLength = 20,
+  trControl = ctrl
+)
+```
+
+
+## Train Ordinary Least Squares (OLS) Model 
+Ordinary Least Squares (OLS) is a benchmark linear modeling method. We've already preprocessed the data in a way which suits both PLS and OLS. We'll determine which of these two models is best among linear regression - to do that let's fit an OLS model. 
+
+```{r}
+set.seed(5889)
+ols_model <- train(
+  x = train_x_proc,
+  y = train_y,
+  method = "lm",
+  trControl = ctrl
+)
+```
+
+Since test_y is missing, we evaluate the different linear models using cross-validation results, since our test set doesn't contain any PH values. 
+
+OLS is interpretable and useful as a baseline. It assumes linear relationships and independence. It may not perform as well as more complex models if predictors are collinear or relationships are nonlinear.
+
+# Train additional models starting with Lasso Regression model
+
+To further assess whether regularization improves performance, models like Lasso, Ridge, and Elastic Net could be explored. These approaches can reduce overfitting and handle correlated predictors more effectively than OLS. In future work or production deployment, it would be advisable to test these variants and compare their performance using the same repeated cross-validation framework.
+
+```{r}
+set.seed(5889)
+
+lasso_model <- train(
+  x = train_x_proc,
+  y = train_y,
+  method = "lasso",
+  tuneLength = 20,
+  trControl = ctrl,
+  preProcess = NULL
+)
+```
+
+# Train Ridge Regression model
+
+```{r}
+set.seed(5889)
+ridge_model <- train(
+  x = train_x_proc,
+  y = train_y,
+  method = "ridge",
+  tuneLength = 20,
+  trControl = ctrl,
+  preProcess = NULL
+)
+```
+
+
+
+# Train Elastic Net model
+```{r}
+set.seed(5889)
+elastic_model <- train(
+  x = train_x_proc,
+  y = train_y,
+  method = "glmnet",
+  tuneLength = 20,
+  trControl = ctrl,
+  preProcess = NULL
+)
+```
+
+We see a warning after running the model for Elastic net that there were missing values in resampled performance measures. Since our model finished training and we still got valid results, and as we will see below our metrics for Elastic Net are close to the others, we will likely not recommend selecting it as our final model unless it offers clear advantages (which we will see that it does not.)
+
+
+# Compare model performance via resampling
+
+We combine cross-validation results and show summary statistics (RMSE, R-squared, MAE)
+```{r}
+model_results <- resamples(list(
+  PLS = pls_model,
+  OLS = ols_model,
+  Lasso = lasso_model,
+  Ridge = ridge_model,
+  ElasticNet = elastic_model
+))
+
+model_summary <- summary(model_results)$statistics
+
+comparison_table <- tibble(
+  Model = rownames(model_summary$RMSE),
+  RMSE = round(model_summary$RMSE[, "Mean"], 6),
+  Rsquared = round(model_summary$Rsquared[, "Mean"], 6),
+  MAE = round(model_summary$MAE[, "Mean"], 6)
+)
+comparison_table
+```
+## Comparison of OLS, PLS, and Lasso
+
+After training and comparing five linear modeling approaches — OLS, PLS, Lasso, Ridge, and Elastic Net — we find that performance across all methods is remarkably similar. Each model was evaluated using repeated 10-fold cross-validation, and results were compared using RMSE (Root Mean Squared Error), R-squared, and MAE (Mean Absolute Error).
+
+The **best RMSE** and **best R-squared** values were achieved by **OLS** and **Elastic Net**, but the differences between all models are minuscule (less than 0.0001 RMSE units). The **lowest MAE** was from OLS at 0.104241, but again, the margin is extremely small.
+
+Given the similarity in performance, we recommend **Ordinary Least Squares (OLS)** for this use case:
+- It is simple, interpretable, and fast to compute.
+- It slightly outperformed PLS and Lasso in both MAE and RMSE.
+- Its coefficients can be used directly for business insight and explainability.
+
+Elastic Net showed nearly identical performance but triggered a convergence warning during resampling, suggesting mild instability. If regularization becomes important due to changing data conditions or overfitting concerns in future phases, Lasso or Elastic Net could be revisited.
+
+This modeling exercise confirms that pH can be predicted with consistent accuracy using standard linear models. The choice of model does not significantly alter accuracy, allowing the business to prioritize simplicity and transparency. Implementing the OLS model enables stakeholders to:
+- Understand which production variables most influence pH
+- Monitor predictions in real time using a straightforward model
+- Translate coefficients into actionable guidance for technicians
+
+ 
+# Visualize performance comparison
+```{r}
+comparison_table_long <- comparison_table |> 
+  pivot_longer(cols = c(RMSE, Rsquared, MAE), names_to = "Metric", values_to = "Value")
+
+ggplot(comparison_table_long, aes(x = Model, y = Value, fill = Metric)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~Metric, scales = "free_y") +
+  labs(title = "Comparison of Linear Models", y = "Metric Value") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(size = 12, face = "bold"),
+    legend.position = "bottom"
+  )
+```
+
+As we can see clearly, the results of the linear models we tested were all very similar.
+
+Our goal was to identify a reliable, interpretable model to predict pH from production data. All five linear models performed similarly, suggesting stable relationships between predictors and pH.
+
+Models should be revisited periodically as new data becomes available or if the production process changes.
+
+To predict on each test set, for reference: 
+```{r}
+pls_pred <- predict(pls_model, newdata = test_x_proc)
+ols_pred <- predict(ols_model, newdata = test_x_proc)
+lasso_pred <- predict(lasso_model, newdata = test_x_proc)
+ridge_pred <- predict(ridge_model, newdata = test_x_proc)
+elastic_pred <- predict(elastic_model, newdata = test_x_proc)
+```
+
+
+To export predictions to CSV, for reference:
+```{r}
+write.csv(data.frame(SampleID = 1:nrow(test_x_proc), Predicted_pH = pls_pred), "ph_predictions_pls.csv", row.names = FALSE)
+write.csv(data.frame(SampleID = 1:nrow(test_x_proc), Predicted_pH = ols_pred), "ph_predictions_ols.csv", row.names = FALSE)
+write.csv(data.frame(SampleID = 1:nrow(test_x_proc), Predicted_pH = lasso_pred), "ph_predictions_lasso.csv", row.names = FALSE)
+write.csv(data.frame(SampleID = 1:nrow(test_x_proc), Predicted_pH = ridge_pred), "ph_predictions_ridge.csv", row.names = FALSE)
+write.csv(data.frame(SampleID = 1:nrow(test_x_proc), Predicted_pH = elastic_pred), "ph_predictions_elasticnet.csv", row.names = FALSE)
+```
+
+
+Variable importance plot for OLS
+```{r}
+vip <- varImp(ols_model)
+plot(vip, top = 10)
+```
+
+
+

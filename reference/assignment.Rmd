@@ -1,0 +1,812 @@
+---
+title: "Project 02: Team Assignment"
+date: last-modified
+format:
+  html:
+    embed-resources: true
+    grid:
+      body-width: 1200px
+    toc: true
+---
+
+Due: May 18, 2025 11:59 PM
+
+## Assignment
+This is role playing.  I am your new boss.  I am in charge of production at ABC Beverage and you are a team of data scientists reporting to me.  My leadership has told me that new regulations are requiring us to understand our manufacturing process, the predictive factors and be able to report to them our predictive model of "PH".
+
+Please use the historical data set I am providing.  Build and report the factors in BOTH a technical and non-technical report.  I like to use Word and Excel.  Please provide your non-technical report in a  business friendly readable document and your predictions in an Excel readable format.   The technical report should show clearly the models you tested and how you selected your final approach.
+
+Please submit both Rpubs links and .rmd files or other readable formats for technical and non-technical reports.  Also submit the excel file showing the prediction of your models for pH.
+
+## Setup
+```{r}
+#| warning: false
+library(caret)
+library(corrplot)
+library(earth)
+library(Formula)
+library(glue)
+library(knitr)
+library(lattice)
+library(plotmo)
+library(plotrix)
+library(readxl)
+library(tidyverse)
+```
+
+
+## Load the Data
+We were given two Excel spreadsheets: `TrainingData.xlsx` and `TestingData.xlsx`:
+```{r}
+train_data <- read_excel(
+  path = "./data/TrainingData.xlsx"
+)
+test_data <- read_excel(
+  path = "./data/TestingData.xlsx"
+)
+```
+
+
+## EDA
+We are going to perform exploratory data analysis (EDA) on the both our `train_data` as well as our `test_data`.
+
+### Summary Information
+Let's get a taste of our data. We shall examine their columns and their types, the number of rows and columns, and the first few rows of the data. Perhaps most importantly, we will look at some summary statistics of the data: the mean, median, min, max, quartiles, and standard deviation of each column.
+```{r}
+data.frame(
+  train_nrow = nrow(train_data),
+  train_ncol = ncol(train_data),
+  test_nrow = nrow(test_data),
+  test_ncol = ncol(test_data)
+) |>
+  kable()
+sapply(train_data, class) |>
+  kable()
+# These make a mess of a PDF
+# head(train_data)
+# head(test_data)
+summary(train_data)
+```
+
+### Missing Values (`NA`)
+Let's quantify how much data is missing from our data.
+
+```{r}
+count_missing <- function(data) {
+  data |>
+    summarise(across(everything(), ~ sum(is.na(.)))) |>
+    pivot_longer(
+      everything(),
+      names_to = "variable",
+      values_to = "missing"
+    ) |>
+    filter(missing > 0) |>
+    mutate(
+      ratio = missing / nrow(data)
+    ) |>
+    arrange(desc(missing))
+}
+
+count_missing(train_data) |>
+  kable()
+count_missing(test_data) |>
+  kable()
+```
+
+
+### Correlation List
+The list is long, so we shall consider correlation that is $\rho>=0.80$ to be interesting. There is a full [pairwise plot](#pairwise-plot) just below.
+```{r}
+cor(train_data[-1], use = "pairwise.complete.obs") |>
+  as.data.frame() |>
+  rownames_to_column("variable") |>
+  pivot_longer(
+    -variable,
+    names_to = "correlation",
+    values_to = "value"
+  ) |>
+  mutate(
+    abs_value = abs(round(value, 2))
+  ) |>
+  filter(
+    variable != correlation & abs_value >= 0.8
+  ) |>
+  arrange(desc(abs_value)) |>
+  kable()
+```
+
+#### Pairwise Plot
+Correlation plot of our training data:
+```{r}
+#| warning: false
+#| fig-width: 12
+#| fig-height: 12
+corrplot(
+  cor(train_data[-1], use = "complete.obs"),
+  method = "color",
+  title = "Pairwise Plot of Variables"
+)
+```
+
+
+
+### Visualize
+#### Histogram
+Histogram of our original data. We are recoding `Brand Code` to be numeric so that we can plot it. We will also use `pivot_longer()` to reshape the data so that we can plot it all in one fell swoop. And we have a handle on `NA`s, so we are filtering them out.
+```{r}
+#| fig-width: 12
+#| fig-height: 16
+train_data |>
+  mutate(
+    `Brand Code` = recode(
+      `Brand Code`,
+      "A" = 1,
+      "B" = 2,
+      "C" = 3,
+      "D" = 4
+    )
+  ) |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "values"
+  ) |>
+  filter(!is.na(values)) |>
+  ggplot(aes(x = values)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~ variable, ncol = 4, scales = "free") +
+  labs(
+    title = "Distribution of Variables",
+    x = "Values",
+    y = "Count"
+  )
+```
+
+
+#### Line Plot
+We would like to better understand the data. A graphic can be invaluable. But our data is not a time series. Nonetheless, they are observations taken at different times (we think it's safe to say). And with some preliminary plotting, the results are interesting if nothing else. So, we will try plotting it with a line plot and see what surfaces. We would like to emphasize that in no way are we suggesting that this should be interpreted as a time series. We are simply trying to get a better understanding of the data.
+
+We will use `pivot_longer()` to reshape the data so that we can plot it one variable stacked on top of another. We will also use `row_number()` to create an index for the x-axis. We will use `facet_wrap()` to create a separate plot for each variable.
+```{r}
+#| fig-width: 12
+#| fig-height: 64
+train_data |>
+  mutate(
+    index = row_number(),
+    `Brand Code` = recode(
+      `Brand Code`,
+      "A" = 1,
+      "B" = 2,
+      "C" = 3,
+      "D" = 4
+    )
+  ) |>
+  relocate(
+    index,
+    .before = everything()
+  ) |>
+  pivot_longer(
+    cols = -1,
+    names_to = "variable",
+    values_to = "values"
+  ) |>
+  ggplot(aes(x = index, y = values)) +
+  geom_line() +
+  facet_wrap(~ variable, ncol = 1, scales = "free") +
+  labs(
+    title = "Line Plot of Variables",
+    x = "Index",
+    y = "Values"
+  )
+```
+
+
+We are curious about the role of `Brand Code`. Do patterns emerge when the data is separated by `Brand Code`? Our first plot was mayhem. We shall facet such that each plot is a single predictor intersected with a single brand (`A`, `B`, `C`, `D`, `NA`). We will use `facet_grid()` to create a separate plot for each variable and `Brand Code`. This will create a grid of plots, with one row for each variable and one column for each `Brand Code`.
+
+```{r}
+#| fig-width: 12
+#| fig-height: 64
+train_data |>
+  mutate(
+    index = row_number()
+  ) |>
+  relocate(
+    index,
+    .before = everything()
+  ) |>
+  pivot_longer(
+    # preserve the `Brand Code` and `index` columns
+    cols = -c(1, 2),
+    names_to = "variable",
+    values_to = "values"
+  ) |>
+  ggplot(aes(x = index, y = values, color = `Brand Code`)) +
+  geom_line(show.legend = FALSE) +
+  facet_grid(variable ~ `Brand Code`, scales = "free") +
+  labs(
+    title = "Line Plot of Variables by Brand Code",
+    x = "Index",
+    y = "Values"
+  )
+```
+
+## Preprocessing Round 1
+We have some work to do:
+
+- We have a lot of variables.
+- We have a lot of correlation.
+- We have `NA`'s in our target variable.
+- We have predictors with varying amounts of missing data.
+- We have a categorical variable.
+- And we have some data that is not `NA`, but looks as if it should be.
+
+We shall solve all of these problems. We are going to save most of it to a new dataframe called `trainDataPP`. But we will remove our `NA` target rows from `train_data` because we don't want to train our model to predict `NA`s. We will use the `dummyVars()` function to one-hot encode our categorical variable.
+
+```{r}
+# first we will remove the `NA` predictors from our data
+train_data <- train_data |>
+  filter(!is.na(`PH`))
+
+# Miscellaneous preprocessing
+trainDataPP <- train_data |>
+  mutate(
+    # Make the NAs encoded as numbers into NAs.
+    # For those with legitimate 0 values, this is flawed.
+    `Hyd Pressure1` = if_else(`Hyd Pressure1` == 0, NA, `Hyd Pressure1`),
+    `Hyd Pressure2` = if_else(`Hyd Pressure2` == 0, NA, `Hyd Pressure2`),
+    `Hyd Pressure3` = if_else(`Hyd Pressure3` == 0, NA, `Hyd Pressure3`),
+    `Mnf Flow` = if_else(`Mnf Flow` < 0, NA, `Mnf Flow`),
+    # We will use `Brand Code`'s NAs as "Unknowns"'
+    `Brand Code` = if_else(is.na(`Brand Code`), "Unknown", `Brand Code`)
+  ) |>
+  rename(
+    # Rename `Brand Code` otherwise `dummyVars()` makes a mess of it.
+    BrandCode. = `Brand Code`
+  )
+
+# Apply one-hot encoding to `BrandCode.`
+trainDataPP <- dummyVars(~ ., data = trainDataPP) |>
+  predict(newdata = trainDataPP) |>
+  as.data.frame()
+```
+
+Now we shall reduce the number of variables by removing those that are highly correlated. We will consider correlation that is $\rho>=0.80$ to be significant. We will remove one of each pair of variables that are correlated. And we will be careful when remove variables that we do not remove both variables of a relationship. Our highly correlated variable are:
+
+| Variable 1 | Variable 2 | Correlation | Remove |
+| ---------- | ---------- | ----------- | ------- |
+| Balling | Balling Lvl | 0.98 | Balling Lvl |
+| Density | Balling | 0.96 | Density |
+| Filler Level | Bowl Setpoint | 0.95 | Filler Level |
+| Density | Balling Lvl | 0.95 | Density |
+| Filler Speed | MFR | 0.93 | MFR |
+| Alch Rel | Balling Lvl | 0.93 | Balling Lvl |
+| Balling | Alch Rel | 0.92 | Alch Rel |
+| Density | Alch Rel | 0.90 | Density |
+| BrandCode.D | Alch Rel | 0.89 | Alch Rel |
+| Alch Rel | Carb Rel | 0.84 | Alch Rel |
+| Carb Rel | Balling Lvl | 0.84 | Balling Lvl |
+| Density | Carb Rel | 0.82 | Density |
+| Balling | Carb Rel | 0.82 | - |
+| Carb Pressure | Carb Temp | 0.81 | Carb Pressure |
+| Hyd Pressure2 | Filler Speed | 0.80 | Hyd Pressure2 |
+
+```{r}
+trainDataPP <- trainDataPP |>
+  select(
+    -c(
+      "`Balling Lvl`",
+      Density,
+      "`Filler Level`",
+      MFR,
+      "`Alch Rel`",
+      "`Carb Pressure`",
+      "`Hyd Pressure2`"
+    )
+  )
+```
+
+
+## Explore Partially Preprocessed Data
+### Taste
+```{r}
+data.frame(
+  train_nrow = nrow(trainDataPP),
+  train_ncol = ncol(trainDataPP),
+  test_nrow = nrow(trainDataPP),
+  test_ncol = ncol(trainDataPP)
+) |>
+  kable()
+sapply(trainDataPP, class) |>
+  kable()
+# These make a mess of a PDF
+# head(trainDataPP)
+# summary(trainDataPP)
+```
+
+### Missing Values
+```{r}
+trainDataPP |>
+  summarise(across(everything(), ~ sum(is.na(.)))) |>
+  pivot_longer(
+    everything(),
+    names_to = "variable",
+    values_to = "missing"
+  ) |>
+  filter(missing > 0) |>
+  mutate(
+    ratio = missing / nrow(train_data)
+  ) |>
+  arrange(desc(missing)) |>
+  kable()
+```
+
+
+### Correlation List
+Let's see what has a significant amount of correlation (>=0.80). There is a full [pairwise plot](#pairwise-plot) below. I am going to keep both `Carb Rel` and `Balling` in the list, because I removed variables that were correlated with each of them. So I don't feel comfortable removing them.
+```{r}
+cor(trainDataPP, use = "pairwise.complete.obs") |>
+  as.data.frame() |>
+  rownames_to_column("variable") |>
+  pivot_longer(
+    -variable,
+    names_to = "correlation",
+    values_to = "value"
+  ) |>
+  mutate(
+    abs_value = abs(round(value, 2))
+  ) |>
+  filter(
+    variable != correlation & abs_value >= 0.8
+  ) |>
+  arrange(desc(abs_value)) |>
+  kable()
+```
+
+### Visualize
+#### Box Plot
+Finally (for histogram'ish stuff) we would like to see a box plot of each variable to get a better idea of the fringes (outliers).
+```{r}
+#| fig-width: 12
+#| fig-height: 12
+
+trainDataPP |>
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "values"
+  ) |>
+  filter(!is.na(values)) |>
+  ggplot(aes(x = variable, y = values)) +
+  geom_boxplot() +
+  labs(
+    title = "Distribution of Preprocessed Variables"
+  ) +
+  facet_wrap(~variable, ncol = 10, scale="free")
+```
+
+
+#### Line Plot
+Let's see what our line plots look like now. We shall use the same method as before.
+```{r}
+#| fig-width: 12
+#| fig-height: 64
+trainDataPP |>
+  mutate(
+    index = row_number()
+  ) |>
+  relocate(
+    index,
+    .before = everything()
+  ) |>
+  pivot_longer(
+    cols = -1,
+    names_to = "variable",
+    values_to = "values"
+  ) |>
+  ggplot(aes(x = index, y = values)) +
+  geom_line() +
+  facet_wrap(~ variable, ncol = 1, scales = "free") +
+  labs(
+    title = "Line Plot of Variables",
+    x = "Index",
+    y = "Values"
+  )
+```
+
+We are inclined to do something about `Hyd Pressure1`, `Hyd Pressure3`, and `Mnf Flow`. They are are `NA` for a long time. The other odd ball is `Usage cont`. It's value goes high at ~1600. Let's zoom in on it and see if we can see anything.
+
+```{r}
+#| fig-width: 12
+#| fig-height: 8
+trainDataPP |>
+  mutate(
+    index = row_number()
+  ) |>
+  relocate(
+    index,
+    .before = everything()
+  ) |>
+  pivot_longer(
+    cols = -1,
+    names_to = "variable",
+    values_to = "values"
+  ) |>
+  filter(variable == "`Usage cont`") |>
+  ggplot(aes(x = index, y = values)) +
+  geom_line() +
+  scale_x_continuous(
+    limits = c(1500, 2000)
+  ) +
+  labs(
+    title = "Zoomed in Line Plot of Usage cont",
+    x = "Index",
+    y = "Values"
+  )
+```
+
+Egads, it looks as if the noisy behavior that led up to ~1625 shrunk down to a much smaller scale. I'm tempted to explode it and center it around 0. Let's see if there is correlation between [0, 1600], if so then we can eliminate this guy and use the other one.
+
+```{r}
+cor(trainDataPP[1:1600,], use = "pairwise.complete.obs") |>
+  as.data.frame() |>
+  rownames_to_column("variable") |>
+  pivot_longer(
+    -variable,
+    names_to = "correlation",
+    values_to = "value"
+  ) |>
+  mutate(
+    abs_value = abs(round(value, 2))
+  ) |>
+  filter(
+    variable == "`Usage cont`" & value > 0.1
+  ) |>
+  arrange(desc(abs_value)) |>
+  kable()
+```
+
+Not even close. Lastly, let's do the same for `Hyd Pressure1`, `Hyd Pressure3`, and `Mnf Flow`.
+```{r}
+cor(trainDataPP[1200:dim(trainDataPP)[1],], use = "pairwise.complete.obs") |>
+  as.data.frame() |>
+  rownames_to_column("variable") |>
+  pivot_longer(
+    -variable,
+    names_to = "correlation",
+    values_to = "value"
+  ) |>
+  mutate(
+    abs_value = abs(round(value, 2))
+  ) |>
+  filter(
+    variable != correlation & value > 0.7
+  ) |>
+  arrange(desc(abs_value)) |>
+  kable()
+```
+
+Oh, what light through yonder window breaks? It looks like `Hyd Pressure3` is highly correlated with `Filler Speed`. We believe that is justification for removing `Hyd Pressure3` from the list.
+
+
+#### Pairwise Plot
+Correlation plot of our preprocessed training data:
+```{r}
+#| warning: false
+#| fig-width: 12
+#| fig-height: 12
+corrplot(
+  cor(trainDataPP, use = "complete.obs"),
+  method = "color",
+  title = "Pairwise Plot of Variables"
+)
+```
+
+## Preprocessing Round 2
+:::{.callout-caution}
+We are dropping `Hyd Pressure1` and `Mnf Flow` because of the large volume of `NA`s. But we are going to keep `Usage cont`. It has some strange values, nonetheless in our preliminary model evaluation we found that `Usage cont` is a highly important variable.
+
+Note: we are also dropping `Hyd Pressure3` because it is highly correlated with `Filler Speed`.
+:::
+
+We are going to drop `Hyd Pressure3` because of what values we have for him, he's pretty correlated `Filler Speed`. And right now I don't know what to do with `Hyd Pressure1` and `Mnf Flow`, nor do I know what to do with `Usage cont`. We need to get on with the show. So, I'm going to drop them all and prepare our dataset for non-linear regression.
+
+```{r}
+trainDataPP <- trainDataPP |>
+  select(
+    -c(
+      "`Hyd Pressure1`",
+      "`Hyd Pressure3`",
+      "`Mnf Flow`"
+    )
+  )
+```
+
+## Non-Linear Regression
+Create a little workshop of utilities. We are going to let `process_and_partition()` do the heavy lifting of preprocessing and partitioning our data. It has a `methods` parameter so that we may preprocess data differently.
+```{r}
+process_and_partition <- function(data, methods) {
+  # separate the data into training and test sets before we preprocess the data
+  X <- select(data, -PH)
+  y <- data$PH
+
+  # preprocess the data
+  model <- preProcess(X, method = methods)
+  X <- predict(model, X)
+
+  set.seed(31415)
+  trainIndex <- createDataPartition(
+    y,
+    p = .8,
+    list = FALSE
+  )
+  return(list(
+    train_X = X[trainIndex, ],
+    train_y = y[trainIndex],
+    test_X = X[-trainIndex, ],
+    test_y = y[-trainIndex]
+  ))
+}
+
+report <- function(model, data) {
+  predictions <- predict(model, data$test_X)
+  MAE <- MAE(predictions, data$test_y)
+  RMSE <- RMSE(predictions, data$test_y)
+  R2 <- R2(predictions, data$test_y)
+  glue("Model: {model$method}, MAE={round(MAE, 2)}, RMSE={round(RMSE, 2)}, R2={round(R2, 2)}") |>
+    print()
+  glue("Best tuned parameters: {colnames(model$bestTune)} = {model$bestTune}") |>
+    print()
+  print(varImp(model))
+}
+```
+
+### Prepare the Data
+We going to assume that scaling, centering and imputing is good for everybody.
+
+Our first data set for training - `dataA` - is derived from `trainDataPP`. We are going to scale, center, impute and do an 80% train data partition on it.
+```{r}
+dataA <- process_and_partition(trainDataPP, c("center", "scale", "medianImpute", "pca"))
+```
+
+Our performance has not been so good. We want to see whether it improves when we use our unadulterated dataA. Actually, we will adulterate it a little bit. We will use `dummyVars()` to one-hot encode our categorical variables.
+```{r}
+trainDataF <- dummyVars(~ ., data = train_data) |>
+  predict(newdata = train_data) |>
+  as.data.frame()
+
+# Note: I experimented with "pca" on this training set and it all around did worse
+# that without it.
+dataB <- process_and_partition(trainDataF, c("center", "scale", "medianImpute"))
+```
+
+
+### KNN
+k-Nearest Neighbors is a non-parametric method used for classification and regression. It works by finding the k-nearest neighbors to a given point and using their values to predict the value of that point.
+
+#### Dataset A
+We shall use our refined dataset for this fitting.
+```{r}
+#| label: knn-A
+model <- train(
+  x = dataA$train_X,
+  y = dataA$train_y,
+  method = "knn",
+  tuneLength = 20,
+  trControl = trainControl(
+    method = "cv",
+    number = 10
+  )
+)
+report(model, dataA)
+```
+
+#### Dataset B
+And we will repeat fitting KNN with the same hyperparameters but this time we will use our full model.
+```{r}
+#| label: knn-B
+model <- train(
+  x = dataB$train_X,
+  y = dataB$train_y,
+  method = "knn",
+  tuneLength = 20,
+  trControl = trainControl(
+    method = "cv",
+    number = 10
+  )
+)
+report(model, dataB)
+```
+
+### SVM
+Support Vector Machines (SVM) is a supervised learning algorithm that can be used for classification or regression. It works by finding the hyperplane that best separates the data into different classes. In this case, we are using it for regression.
+
+#### Linear
+##### Dataset A
+```{r}
+#| label: svr-linear-A
+model <- train(
+  x = dataA$train_X,
+  y = dataA$train_y,
+  method = "svmLinear",
+  tuneLength = 10,
+  trControl = trainControl(
+    method = "cv",
+    number = 10
+  )
+)
+report(model, dataA)
+```
+
+##### Dataset B
+```{r}
+#| label: svr-linear-B
+model <- train(
+  x = dataB$train_X,
+  y = dataB$train_y,
+  method = "svmLinear",
+  tuneLength = 10,
+  trControl = trainControl(
+    method = "cv",
+    number = 10
+  )
+)
+report(model, dataB)
+```
+
+#### Polynomial
+##### Dataset A
+```{r}
+#| label: svr-poly-A
+model <- train(
+  x = dataA$train_X,
+  y = dataA$train_y,
+  method = "svmPoly",
+  tuneLength = 3,
+  trControl = trainControl(
+    method = "cv",
+    number = 6
+  )
+)
+report(model, dataA)
+```
+
+##### Dataset B
+```{r}
+#| label: svr-poly-B
+model <- train(
+  x = dataB$train_X,
+  y = dataB$train_y,
+  method = "svmPoly",
+  tuneLength = 3,
+  trControl = trainControl(
+    method = "cv",
+    number = 6
+  )
+)
+report(model, dataB)
+```
+
+#### Radial
+##### Dataset A
+```{r}
+#| label: svr-radial-A
+model <- train(
+  x = dataA$train_X,
+  y = dataA$train_y,
+  method = "svmRadial",
+  tuneLength = 5,
+  trControl = trainControl(
+    method = "cv",
+    number = 10
+  )
+)
+report(model, dataA)
+```
+
+##### Dataset B
+```{r}
+#| label: svr-radial-B
+model <- train(
+  x = dataB$train_X,
+  y = dataB$train_y,
+  method = "svmRadial",
+  tuneLength = 5,
+  trControl = trainControl(
+    method = "cv",
+    number = 10
+  )
+)
+report(model, dataB)
+```
+
+### MARS
+Multivariate Adaptive Regression Splines (MARS) is a non-parametric regression technique that can be used for both linear and non-linear regression. It works by fitting piecewise linear functions to the data.
+
+#### Dataset A
+```{r}
+#| label: mars-A
+grid = expand.grid(
+  degree = 1:2,
+  nprune = 5:10
+)
+model <- train(
+  x = dataA$train_X,
+  y = dataA$train_y,
+  method = "earth",
+  tuneGrid = grid,
+  trControl = trainControl(
+    method = "cv",
+    number = 10
+  )
+)
+report(model, dataA)
+```
+
+#### Dataset B
+```{r}
+#| label: mars-B
+grid = expand.grid(
+  degree = 1:2,
+  nprune = 5:10
+)
+model <- train(
+  x = dataB$train_X,
+  y = dataB$train_y,
+  method = "earth",
+  tuneGrid = grid,
+  trControl = trainControl(
+    method = "cv",
+    number = 10
+  )
+)
+report(model, dataB)
+```
+
+### Neural Network
+Neural Networks are a class of models that are inspired by the way the human brain works. They are used for both classification and regression tasks. In this case, we are using it for regression.
+
+#### Dataset A
+```{r}
+#| label: nnet-A
+grid <- expand.grid(
+  size = c(2, 4, 6, 8, 10),
+  decay = c(0, 0.05, 0.1, 0.15)
+)
+model <- train(
+  x = dataA$train_X,
+  y = dataA$train_y,
+  method = "nnet",
+  linout = TRUE,
+  trace = FALSE,
+  maxit = 1000,
+  tuneGrid = grid,
+  trControl = trainControl(
+    method="cv",
+    number=5
+  )
+)
+report(model, dataA)
+```
+
+#### Dataset B
+```{r}
+#| label: nnet-B
+grid <- expand.grid(
+  size = c(2, 4, 6, 8, 10),
+  decay = c(0, 0.05, 0.1, 0.15)
+)
+model <- train(
+  x = dataB$train_X,
+  y = dataB$train_y,
+  method = "nnet",
+  linout = TRUE,
+  trace = FALSE,
+  maxit = 1000,
+  tuneGrid = grid,
+  trControl = trainControl(
+    method="cv",
+    number=5
+  )
+)
+report(model, dataB)
+```
