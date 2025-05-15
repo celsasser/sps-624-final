@@ -120,7 +120,7 @@ count_missing(test_data) |>
   kable()
 ```
 
-As we can see, there are a fair number of missing values. PH's 4 missing values may not be topping the charts; nonetheless, it may be the most problematic. Guidance to handle this scenario is to remove the rows where the PH is null from the training and test sets so that would include removing the rows in the predictor and response sets. We will explain more on this when we get to that step prior to training our model.
+As we can see, there are a fair number of missing values. PH's four missing values may not be topping the charts; nonetheless, it may be the most problematic. Guidance to handle this scenario is to remove the rows where the PH is null from the training and test sets so that would include removing the rows in the predictor and response sets. We will explain more on this when we get to that step prior to training our model.
 
 ### Distribution
 We are temporarily recoding `Brand Code` to be numeric so that we can pivot our dataset to be long. And we have a handle on missing values, so we are filtering them out.
@@ -154,7 +154,7 @@ train_data |>
 
 We see a good amount of data with normal distributions. But we also see some that variables that stand out:
 
-- `Bailing`, `Bailing Lvl` and `Density` are bimodal. To a less extent, so is `Air Pressurer`.
+- `Bailing`, `Bailing Lvl` and `Density` are bimodal. To a lesser extent, so is `Air Pressurer`.
 - `Filler Speed` is very right skewed, but has a crop of suspicious values at the low end.
 - `Hyd Pressure1`, `Hyd Pressure2`, and `Hyd Pressure3` all have a very large deposit of 0 values. Similarly, `Mnf Flow` has a large deposit of negative values. 
 - `Oxygen Filler` is extremely left skewed.
@@ -172,7 +172,7 @@ test_data_pp <- predict(model, newdata = test_data) |>
 
 
 ### Correlation
-We are using a correlation matrix to help us better understand the relationships between predictor variables. We are leaving the target (`PH`) in the dataset so that we may learn of predictors with which it has correlation. Perhaps for no other reason than curiosity, and so that we don't remove predictors with which it has strong relationships.
+We are using a correlation matrix to help us better understand the relationships between predictor variables. We are leaving the target (`PH`) in the dataset so that we may learn of predictors with which it has correlation. And so that we don't remove predictors with which it has strong relationships.
 
 ```{r fig.width=8, fig.height=8}
 cor_matrix <- cor(train_data_pp, use = "pairwise.complete.obs")
@@ -397,7 +397,7 @@ We have discovered much and have some work to do. Some preprocessing we will app
 
 First, we have already dealt with our categorical data in `train_data_pp` and `test_data_pp`. We shall use them as a starting place for further preprocessing.
 
-We will deal with our missing `PH` data. We don't want to train our models to predict `NA`. So we are going to drop the 4 rows missing `PH` values.
+We will deal with our missing `PH` data. We don't want to train our models to predict `NA`. So we are going to drop the four rows missing `PH` values.
 
 ```{r}
 train_data_pp <- train_data_pp |>
@@ -408,21 +408,26 @@ train_data_pp <- train_data_pp |>
 And now we will remove highly correlated variables. We will use a correlation threshold of 0.95. While 0.75 is a common starting point, retaining more features helps maintain signal for models like PLS, which can internally handle correlated predictors by extracting latent factors.
 
 ```{r}
-cor_matrix <- train_data_pp |>
-    select(-PH) |>
-    cor(use = "pairwise.complete.obs")
-high_corr <- findCorrelation(cor_matrix, cutoff = 0.95)
+high_corr <- train_data_pp |>
+  select(-PH) |>
+  cor(use = "pairwise.complete.obs") |>
+  findCorrelation(cutoff = 0.95)
+# print the names of the highly correlated variables
+glue("Removing columns: {colnames(train_data_pp)[high_corr]}")
+# remove the highly correlated variables
 train_data_pp <- train_data_pp[, -high_corr]
 test_data_pp <- test_data_pp[, -high_corr]
 ```
 
 For missing data we will impute, but the suggested methods of imputation for different models varies, so we are going to leave that processing to be done at training time.
 
-Our line plots revealed some data that is suspiciously constant over many consecutive observations: `Mnf Flow`, `Hyd Pressure1`, `Hyd Pressure2`, and `Hyd Pressure3`. We suspect that they are effectively missing data. Do we want to do any of the following:
+Our line plots revealed some data that is suspiciously constant over many consecutive observations: `Mnf Flow`, `Hyd Pressure1`, `Hyd Pressure2`, and `Hyd Pressure3`. We suspect that they are effectively missing data. Do we want to do any of the following?
 
 1. Leave them as they are.
 2. Remove the variables altogether.
-3. Set the suspicious observations to `NA` and impute them?
+3. Set the suspicious observations to `NA` and impute them.
+
+We are going to leave them as they are. We don't know enough about the data to feel confident in assuming they are missing data. We are going to assume that they are legitimate values.
 
 ```{r eval=FALSE}
 train_data_pp <- train_data_pp |>
@@ -438,9 +443,9 @@ train_data_pp <- train_data_pp |>
 
 
 ## Regression Workshop
-This is our little workshop of utilities. You will see below in `preprocess` that we don't actually partition our data. Our model being somewhat small, we have decided to use cross validation to test the performance of our models. We think it is better because it uses different combinations of data to train and test our models. If we partition our training dataset then we are compromising our training and testing in one of two mutually exclusive ways. If we chose to partition it and not use cross validation, then we are training our model with only one snapshot of our data, which could lead to bias. If we chose to partition it and use cross validation, then we are training it with an even smaller dataset. We feel we have everything to gain by not partitioning the data and nothing to lose.
+This is our little workshop of utilities. You will see below in `preprocess` that we don't actually partition our data. Our dataset being somewhat small, we have decided to use cross validation to test the performance of our models. We think it is better because it uses different combinations of data to train and test our models. If we partition our training dataset then we are compromising our training and testing in one of two mutually exclusive ways. If we chose to partition it and not use cross validation, then we are training our model with only one snapshot of our data, which could lead to bias. If we chose to partition it and use cross validation, then we are training it with an even smaller dataset. We feel we have everything to gain by not partitioning the data and nothing to lose.
 
-`preprocess()` is a simple utility that sets the random seed in hopes that all models will use the same cross validated sequence of data. It extracts y from `data`, applies preprocessing methods to the predictors. It returns a list including the preprocessed data, the preProcess model, and the response variable.
+`preprocess()` is a simple utility that sets the random seed in the hopes that all models will use the same cross validated sequence of data. It extracts `y` from `data`, and applies the preprocessing `methods` to the predictors. It returns a list including the preprocessed data, the preprocess model, and the response variable.
 ```{r}
 preprocess <- function(data, methods) {
   set.seed(31415)
@@ -474,7 +479,7 @@ report <- function(model) {
 }
 ```
 
-`ctrl` is our directive to the training process to use cross validation to train and evaluate our models. All models will use this control method.
+`ctrl` is our directive to the training process to use cross validation to train and evaluate our models. Most models will use this control method. Some models will use a less intense cross validation method. For example, Random Forest takes a long time to run with our default parameters. We are cutting down on cross validation for Random Forest to 2 folds and 5 repeats.
 ```{r}
 ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 5)
 ```
@@ -569,6 +574,7 @@ After training and comparing five linear modeling approaches — OLS, PLS, Lasso
 The **best RMSE** and **best R-squared** values were achieved by **OLS** and **Elastic Net**, but the differences between all models are minuscule (less than 0.0001 RMSE units). The **lowest MAE** was from OLS at 0.104241, but again, the margin is extremely small.
 
 Given the similarity in performance, we recommend **Ordinary Least Squares (OLS)** for this use case:
+
 - It is simple, interpretable, and fast to compute.
 - It slightly outperformed PLS and Lasso in both MAE and RMSE.
 - Its coefficients can be used directly for business insight and explainability.
@@ -576,6 +582,7 @@ Given the similarity in performance, we recommend **Ordinary Least Squares (OLS)
 Elastic Net showed nearly identical performance but triggered a convergence warning during resampling, suggesting mild instability. If regularization becomes important due to changing data conditions or overfitting concerns in future phases, Lasso or Elastic Net could be revisited.
 
 This modeling exercise confirms that pH can be predicted with consistent accuracy using standard linear models. The choice of model does not significantly alter accuracy, allowing the business to prioritize simplicity and transparency. Implementing the OLS model enables stakeholders to:
+
 - Understand which production variables most influence pH
 - Monitor predictions in real time using a straightforward model
 - Translate coefficients into actionable guidance for technicians
@@ -602,7 +609,8 @@ report(knn_model)
 ```
 
 ### SVM Model
-Support Vector Machines (SVM) is a supervised learning algorithm that can be used for classification or regression. It works by finding the hyperplane that best separates the data into different classes. In this case, we are using it for regression.
+Support Vector Machines (SVM) is a supervised learning algorithm that can be used for classification or regression. It works by finding the hyperplane that best separates the data into different classes. In this case, we are using it for regression and will try three different SVM models: linear, polynomial, and radial.
+
 
 #### Linear SVM Model
 ```{r}
@@ -645,7 +653,9 @@ report(svmr_model)
 ```
 
 ### MARS Model
-Multivariate Adaptive Regression Splines (MARS) is a non-parametric regression technique that can be used for both linear and non-linear regression. It works by fitting piecewise linear functions to the data.
+Multivariate Adaptive Regression Splines (MARS) is a non-parametric regression technique that can be used for both linear and non-linear regression. It works by fitting piece-wise linear functions to the data.
+
+We are using a less intensive cross validation method for MARS because it takes a long time to run with our default parameters. We are cutting down on cross validation to 2 folds and 5 repeats.
 
 ```{r}
 grid = expand.grid(
@@ -670,6 +680,8 @@ report(mars_model)
 ### Neural Network Model
 Neural Networks are a class of models that are inspired by the way the human brain works. They are used for both classification and regression tasks. In this case, we are using it for regression.
 
+As with MARS, we are using a less intensive cross validation method for Neural Networks because it takes a long time to run with our default parameters. We are cutting down on cross validation to 2 folds and 5 repeats.
+
 ```{r}
 grid <- expand.grid(
   size = c(2, 4, 6, 8, 10),
@@ -692,6 +704,10 @@ nn_model <- train(
 report(nn_model)
 ```
 
+### Non Linear Summary
+Of the non-linear models, the SVM radial model performed best with an R-squared of 0.485, followed closely by KNN with an R-squared of 0.455. Somewhat surprisingly, the MARS model had the lowest R-squared of the non linear bunch of 0.302, while the Neural Network model had an R-squared of 0.384.
+
+And the MAE and RMSE, for the most part, reinforce R-squared's story. The non-linear champion, SVM radial model, had the lowest MAE of 0.093 and lowest RMSE of 0.125. While, at the other extreme, MARS had the highest MAE of 0.114 and 2nd highest RMSE of 0.144.
 
 ## Decision Trees
 ### Refined Preprocessing
@@ -750,7 +766,7 @@ report(rf_model)
 ```
 
 Visualize the model
-```{r}
+```{r fig.width=8, fig.height=9}
 varImpPlot(
   rf_model$finalModel,
   type = 1,
@@ -810,7 +826,7 @@ model_results |>
 ```
 
 ## The Champion
-"The judges have decided. A champion, ideally, is a model with the lowest MAE, the lowest RMSE, and the highest R2. And we have such a champion. Please allow me to present the champion of our modeling competition: Random Forest. It is simple, moderately interpretable, but not very fast to compute."
+A champion, ideally, is a model with the lowest MAE, the lowest RMSE, and the highest R2. And we have such a champion. Please allow us to present the champion of our modeling competition: Random Forest. It is simple, moderately interpretable, but not very fast to compute.
 
 Among all tested models, the Random Forest model did demonstrate the best overall performance, achieving the lowest MAE (0.080), lowest RMSE (0.108), and highest r squared (0.626), indicating superior predictive accuracy and explanatory power.
 
