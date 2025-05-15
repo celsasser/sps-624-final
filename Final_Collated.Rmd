@@ -49,7 +49,7 @@ library(tidyverse)
 ```
 
 ## Load the Data
-First we must load the data. We have been provided two datasets. We presumed that one was designated for training ("StudentData.xlsx") and the other for testing ("StudentEvaluation.xlsx"). But, we found "StudentEvaluation.xlsx" does not have a target variable. So, we concluded that "StudentData.xlsx" is for both training and testing and that "StudentEvaluation.xlsx" is for our final prediction.
+First we must load the data. We have been provided two datasets. We presumed that one was designated for training ("StudentData.xlsx") and the other for testing ("StudentEvaluation.xlsx"). But, we found "StudentEvaluation.xlsx" does not have target variable values. So, we concluded that "StudentData.xlsx" is for both training and testing and that "StudentEvaluation.xlsx" is for our final prediction.
 
 ```{r}
 train_data <- read_excel("StudentData.xlsx")
@@ -57,11 +57,11 @@ test_data <- read_excel("StudentEvaluation.xlsx")
 ```
 
 ## EDA
-George Hagstrom, our professor of DATA 607, defined exploratory data analysis as "...the art of looking at data in a systematic way in order to understand the the underlying structure of the data. It has two main goals: ensure data quality and uncover patterns to guide future analysis. EDA is detective work: you ask and answer questions, which inspires more questions." And that is exactly what we will do. We are going to get to know it by summarizing it, scrutinizing it, looking at it's correlation properties, and visualizing it.
+George Hagstrom, our professor of DATA 607, defined exploratory data analysis as "...the art of looking at data in a systematic way in order to understand the the underlying structure of the data. It has two main goals: ensure data quality and uncover patterns to guide future analysis. EDA is detective work: you ask and answer questions, which inspires more questions." And that is exactly what we will do. We are going to get to know our dataset\[s\] by summarizing it, scrutinizing it, looking at it's correlation properties, and visualizing it.
 
 
 ### Summary Information
-We will take a look at a sample of the data. We shall also examine our data's columns and types, the number of rows and columns, and the first few rows of the data. And finally, we will calculate some summary statistics of the data: the mean, median, min, max, and standard deviation of each column so that we may better understand the nature of our data.
+We will take a look at a sample of the data. We shall also examine our data's columns and types, the number of rows and columns, and the first few rows of the data. And finally, we will calculate some summary statistics: the mean, median, min, max, and standard deviation of each column so that we may better understand the nature of our data.
 ```{r}
 head(train_data)
 ```
@@ -72,7 +72,7 @@ str(train_data)
 
 We can see there are 33 columns in total and 2,571 rows in total. The 33 columns includes the "PH" column which is what we will be aiming to predict -- PH will be the response variable in our linear regression exploration.
 
-We can see that we have mostly numeric values. The only character or categorical (non-numeric) is the `Brand Code`. Based on information in our team's preferred guidance on predictive modeling, to deal with non-numeric values (a.k.a. categorical values, which Brand Code is the only one) the recommendation is to either convert into dummy variables or remove if not informative or the value has too many categories. We have found that it has significant importance in some of our models, we will convert it to a dummy variable before training (since models such as Lasso requires input predictors to be numeric).
+We can see that we have mostly numeric values. The only character or categorical (non-numeric) is the `Brand Code`. Based on information in our team's preferred guidance on predictive modeling, to deal with non-numeric values (a.k.a. categorical values, of which Brand Code is the only one) the recommendation is to either convert into dummy variables or remove if not informative or the value has too many categories. We have found that it has significant importance in some of our models, we will convert it to a dummy variable before training (since models such as Lasso requires input predictors to be numeric).
 
 We can also see that there are negative values which means we won't be able to apply the BoxCox method for processing our data. Our guidance and standards, from Applied Predictive Modeling, state that if the data includes negatives we should use the YeoJohnson method instead.
 
@@ -84,10 +84,16 @@ data.frame(
   median = sapply(df, median, na.rm = TRUE) |> round(3),
   min = sapply(df, min, na.rm = TRUE) |> round(3),
   max = sapply(df, max, na.rm = TRUE) |> round(3),
-  sd = sapply(df, sd, na.rm = TRUE) |> round(3)
+  sd = sapply(df, sd, na.rm = TRUE) |> round(3),
+  sd.normal = sapply(df, function(x) {
+    x = x[!is.na(x)]
+    sd(x) / (max(x) - min(x))
+  }) |> round(3)
 ) |>
   kable()
 ```
+
+Looking at the variance, we see that `MFR` is very low. On the other hand, `Mnf Flow` and `Hyd Pressure3` have relatively high amounts of variance.
 
 ### Missing Values (`NA`)
 Let's quantify how much data is missing from our data.
@@ -146,8 +152,16 @@ train_data |>
   )
 ```
 
+We see a good amount of data with normal distributions. But we also see some that variables that stand out:
+
+- `Bailing`, `Bailing Lvl` and `Density` are bimodal. To a less extent, so is `Air Pressurer`.
+- `Filler Speed` is very right skewed, but has a crop of suspicious values at the low end.
+- `Hyd Pressure1`, `Hyd Pressure2`, and `Hyd Pressure3` all have a very large deposit of 0 values. Similarly, `Mnf Flow` has a large deposit of negative values. 
+- `Oxygen Filler` is extremely left skewed.
+- `Bowl Setpoint` and `Pressure Setpoint` look as if they are comprised of discrete values.
+
 ### One Hot Encoding
-Before we continue exploring, we are going to convert our categorical variable (`Brand Code`) to multiple variables using one hot encoding. We are doing it now because we are about to examine correlation and we want to include `Brand Code` in that study. We will store it in an intermediate variable named `train_data_pp`.
+Before we continue exploring, we are going to convert our categorical variable (`Brand Code`) to multiple variables using one hot encoding. We are doing it now because we are about to examine correlation and we want to include `Brand Code` in that study. We will store the results in `train_data_pp`, which will ultimately be our preprocessed training data. We will apply the same transformation to `test_data` so that we can use it for prediction later.
 ```{r}
 model <- dummyVars(~ ., data = train_data)
 train_data_pp <- predict(model, newdata = train_data) |>
@@ -158,14 +172,14 @@ test_data_pp <- predict(model, newdata = test_data) |>
 
 
 ### Correlation
-A correlation matrix is used to help understand the relationships among predictor variables. We are leaving the target (`PH`) in the dataset so that we may learn of predictors with which it has correlation. Perhaps for no other reason than curiosity, and so that we don't remove predictors with which it has strong relationships.
+We are using a correlation matrix to help us better understand the relationships between predictor variables. We are leaving the target (`PH`) in the dataset so that we may learn of predictors with which it has correlation. Perhaps for no other reason than curiosity, and so that we don't remove predictors with which it has strong relationships.
 
 ```{r fig.width=8, fig.height=8}
 cor_matrix <- cor(train_data_pp, use = "pairwise.complete.obs")
 corrplot::corrplot(cor_matrix, order = "hclust", tl.cex = 0.7)
 ```
 
-And let's identify those that we may want to remove because they are highly correlated. We will list variables with $\ge .80$ correlation.
+And let's identify those that we may want to remove because they are highly correlated. We will list variables with $\ge .85$ correlation.
 ```{r}
 cor_matrix |>
   as.data.frame() |>
@@ -176,17 +190,18 @@ cor_matrix |>
     values_to = "value"
   ) |>
   mutate(
-    abs_value = abs(round(value, 2))
+    value = round(value, 3),
+    abs_value = abs(value)
   ) |>
   filter(
-    variable != correlation & abs_value >= 0.8
+    variable != correlation & abs_value >= 0.85
   ) |>
   arrange(desc(abs_value)) |>
   kable()
 ```
 
 ### Linear View
-We would like to better understand the data and line plots can be invaluable. But our data is not a time series. Nonetheless, we think that it's safe to assume that the observations were made over time. So, we will try plotting it with a line plot and see what patterns, if any, surface. We would like to emphasize that in no way are we suggesting that this should be interpreted as a time series. We are simply viewing it through the lens of a line plot.
+We saw some weird distributions in our data. And in our summary statistics we saw that some of our variables had a lot of variance. We also saw that some of our variables had a lot of missing values. We are going to take a look at the data in a different way. We are going to plot it as a line plot. But our data is not a time series. Nonetheless, we think that it's safe to assume that the observations were made over time. So, we will try plotting it with a line plot and see what patterns, if any, surface. We would like to emphasize that in no way are we suggesting that this should be interpreted as a time series. We are simply viewing it through the lens of a line plot.
 
 We will use `pivot_longer()` to reshape the data so that we can plot it one variable stacked on top of another. We will also use `row_number()` to create an index for the x-axis. We will use `facet_wrap()` to create a separate plot for each variable.
 ```{r fig.width=10, fig.height=50}
@@ -212,6 +227,15 @@ train_data_pp |>
     y = "Values"
   )
 ```
+
+We see a lot of several interesting patterns. 
+
+1. We see that `Mnf Flow`, `Hyd Pressure1`, `Hyd Pressure2`, and `Hyd Pressure3` have a lot of consecutive observations with the same value. It is very likely that these are the values we were seeing in our histograms.
+2. `Carb Flow`'s pattern is consistent from 0 to 2000 at which point it drops significantly.
+3. `Carb Pressure1` exhibits what looks like two different modes of operation: 0 to ~1350 and then ~1350 to the end. The "modes" are separated by what appears to be a small gap.
+4. `Oxygen Filler` also appears to have two modes of operation.
+5. `Usage Cont` may be the oddest variable of all of them. It exhibits what looks like a noisy pattern up until ~1600 at which point it radically goes high and stays there in a noisy pattern.
+6. `PH`'s trend line is flat, but it clearly has a daily cycle. Just kidding (though it does almost look like timeseries data).
 
 ## PCA Study
 We employed Principal Component Analysis (PCA) as a dimensionality reduction technique to better understand the structure of the predictor space and to address potential multicollinearity among variables. This will also give us our first glimpse at important predictors and related predictors, and we may recognize these patterns in our models, as well.
@@ -801,7 +825,7 @@ Finally, we will make predictions using our champion model, Random Forest. We wi
 ```{r}
 # preprocess the data with the same model with which we preprocessed the training model
 df <- predict(rf_data$PPM, test_data_pp)
-# the variable names in our training set caused problems with `randomForest` so we 
+# the variable names in our training set caused problems with `randomForest` so we
 # "cleaned" them. The model is expecting the same variables.
 df <- clean_names(df)
 data.frame(
