@@ -5,7 +5,6 @@ author:
   - Alex Ptacek
   - Amanda Knudsen
   - Curtis Elsasser
-  - Sheriann Mclarty
   - Yana Rabkova
 format:
   html:
@@ -70,7 +69,7 @@ str(train_data)
 
 We can see there are 33 columns in total and 2,571 rows in total. The 33 columns includes the "PH" column which is what we will be aiming to predict -- PH will be the response variable in our linear regression exploration.
 
-We can see that we have mostly numeric values. The only character or categorical (non-numeric) is the `Brand Code`. Based on information in our team's preferred guidance on predictive modeling, to deal with non-numeric values (a.k.a. categorical values, of which Brand Code is the only one) the recommendation is to either convert into dummy variables or remove if not informative or the value has too many categories. We have found that it has significant importance in some of our models, we will convert it to a dummy variable before training (since models such as Lasso requires input predictors to be numeric).
+We can see that we have mostly numeric values. The only character or categorical (non-numeric) is the `Brand Code`. Based on information in our team's preferred guidance, by Max Kuhn and Kjell Johnson, on predictive modeling, to deal with non-numeric values (a.k.a. categorical values, of which Brand Code is the only one) the recommendation is to either convert into dummy variables or remove if not informative or the value has too many categories. We have found that it has significant importance in some of our models, we will convert it to a dummy variable before training (since models such as Lasso requires input predictors to be numeric).
 
 We can also see that there are negative values which means we won't be able to apply the BoxCox method for processing our data. Our guidance and standards, from Applied Predictive Modeling, state that if the data includes negatives we should use the YeoJohnson method instead.
 
@@ -154,7 +153,7 @@ We see a good amount of data with normal distributions. But we also see some tha
 
 - `Bailing`, `Bailing Lvl` and `Density` are bimodal. To a lesser extent, so is `Air Pressurer`.
 - `Filler Speed` is very right skewed, but has a crop of suspicious values at the low end.
-- `Hyd Pressure1`, `Hyd Pressure2`, and `Hyd Pressure3` all have a very large deposit of 0 values. Similarly, `Mnf Flow` has a large deposit of negative values. 
+- `Hyd Pressure1`, `Hyd Pressure2`, and `Hyd Pressure3` all have a very large deposit of 0 values. Similarly, `Mnf Flow` has a large deposit of negative values.
 - `Oxygen Filler` is extremely left skewed.
 - `Bowl Setpoint` and `Pressure Setpoint` look as if they are comprised of discrete values.
 
@@ -226,7 +225,7 @@ train_data_pp |>
   )
 ```
 
-We see a lot of several interesting patterns. 
+We see a lot of several interesting patterns.
 
 1. We see that `Mnf Flow`, `Hyd Pressure1`, `Hyd Pressure2`, and `Hyd Pressure3` have a lot of consecutive observations with the same value. It is very likely that these are the values we were seeing in our histograms.
 2. `Carb Flow`'s pattern is consistent from 0 to 2000 at which point it drops significantly.
@@ -250,12 +249,12 @@ The PCA was conducted using the caret and tidyverse packages in R. The procedure
 
 ```{r}
 # Exclude target
-predictors <- train_data_pp |> 
-  select(-PH) |> 
+predictors <- train_data_pp |>
+  select(-PH) |>
   select(where(is.numeric))
 
 # Preprocess: transform and standardize
-predictors_prep <- preProcess(predictors, 
+predictors_prep <- preProcess(predictors,
                               method = c("YeoJohnson", "center",
                                          "scale", "medianImpute"))
 
@@ -306,8 +305,8 @@ scree_df$Cumulative_Variance <- cumulative_variance
 
 # Print table
 scree_df |>
-  as_tibble() |> 
-  filter(row_number() < 16) |> 
+  as_tibble() |>
+  filter(row_number() < 16) |>
   kable()
 ```
 
@@ -320,8 +319,8 @@ The first few components capture a substantial portion of the total variance.
 The rotation matrix provides the loadings of each original variable on the principal components. Loadings close to ±1 indicate strong influence, while values near 0 indicate minimal contribution.
 
 ```{r}
-pca_result$rotation[,1:5] |> 
-  as.data.frame() |> 
+pca_result$rotation[,1:5] |>
+  as.data.frame() |>
   arrange(desc(abs(PC1)))
 ```
 
